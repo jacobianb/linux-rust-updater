@@ -1,0 +1,96 @@
+#!/bin/bash
+STEAMCMDDIR=/home/steam/steamcmd
+SERVERDIR=$STEAMCMDDIR/steamapps/common/rust_dedicated
+DATA=/home/steam/rust
+RCON=$DATA/rcon
+
+SERVER_EMPTY="$($RCON status | grep -c 'players : 0')"
+SERVER_NORMAL="$($RCON status | grep -c 'players')"
+
+UPTIME="$(ps -eo etimes=,command= | grep -m1 '[R]ustDedicated' | sed -e 's/^[[:space:]]*//' | cut -d ' ' -f 1)"
+
+
+cd "$(echo $SERVERDIR)"
+
+function Log {
+	echo "$(date) $1" >> $DATA/Log
+}
+
+function UpdateAndRestart {
+        $RCON quit
+	screen -S rust_server -X quit
+	$STEAMCMDDIR/steamcmd.sh +login anonymous +app_update 258550 validate +quit
+        while [ $? -ne 0 ]; do
+		Log "Update failed. retrying..."
+		$STEAMCMDDIR/steamcmd.sh +login anonymous +app_update 258550 validate +quit
+	 done
+	#wget -O OxideUpdate.zip https://github.com/OxideMod/Oxide/releases/download/latest/Oxide-Rust.zip
+        #unzip -o OxideUpdate.zip
+        #rm -rf OxideUpdate.zip
+        #cd RustDedicated_Data/Managed
+        #rm -rf Oxide.Ext.RustIO.dll
+        #wget http://playrust.io/latest/oxide -O Oxide.Ext.RustIO.dll
+	screen -dmS rust_server /home/steam/steamcmd/steamapps/common/rust_dedicated/StartRust
+ }
+
+
+if [ "$UPTIME" -gt "480" ] && [ ! -f $DATA/lock ] ; then
+	touch $DATA/lock
+	rm -rf $STEAMCMDDIR/appcache
+	NEWEST_UPDATE=`$STEAMCMDDIR/steamcmd.sh +login anonymous +app_info_update 1 +app_info_print "258550" +quit | grep -EA 1000 "^\s+\"branches\"$" | grep -EA 5 "^\s+\"public\"$" | grep -m 1 -EB 10 "^\s+}$" | grep -E "^\s+\"buildid\"\s+" | tr '[:blank:]"' ' ' | tr -s ' ' | cut -d " " -f3`
+	if [ ! -f $DATA/InstalledUpdate ]; then
+		OUR_UPDATE='1'
+	else
+		OUR_UPDATE=`cat $DATA/InstalledUpdate`
+	fi
+	if [ "$NEWEST_UPDATE" != "$OUR_UPDATE" ] && [ "$NEWEST_UPDATE" != "" ] && [ "$OUR_UPDATE" != "" ]; then
+		if [ "$SERVER_EMPTY" == "0" ]; then
+			$RCON say A Rust update is available, the server will update and restart in 5 minutes!
+			sleep 240
+			$RCON say A Rust update is available, the server will update and restart in 1 minute!
+			sleep 50
+			$RCON say A Rust update is available, the server will update and restart in 10 seconds!
+			$RCON say Saving...
+			$RCON save
+			$RCON say Save Complete.
+			sleep 7
+			$RCON say A rust update is available, the server will shutdown and update now. We\'ll be back in a few minutes!
+			sleep 3
+		fi
+		LastSeedChange=`cat $DATA/LastSeedChange`
+		Difference=`expr "$(date +%s)" - $LastSeedChange`
+		Log "Last seed change was $Difference seconds ago."
+		if [ "$Difference" -gt "604800" ] && [ $(date +\%d) -le 07 ] && [ $(date +\%u)=="4" ]; then
+			echo "$(date +%s)" > "$DATA/Seed"
+			echo "$(date +%s)" > "$DATA/LastSeedChange"
+			Log "Today is the first thursday of the month. The seed has been changed!"
+		fi
+		UpdateAndRestart
+		Log "Normal Update - $(echo $OUR_UPDATE) to $(echo $NEWEST_UPDATE)"
+		echo "$NEWEST_UPDATE" > "$DATA/InstalledUpdate"
+	else
+		if [ "$SERVER_EMPTY" == "1" ] && [ "$UPTIME" -gt "21600" ]; then
+			UpdateAndRestart
+			Log "Normal Restart - UPTIME: $UPTIME"
+		elif [ "$SERVER_NORMAL" == "0" ]; then
+			if [ ! -f $DATA/RCONFailCount ]; then
+                		FAIL_COUNT='1'
+
+        		else
+                		FAIL_COUNT=`cat $DATA/RCONFailCount`
+				FAIL_COUNT=`expr $FAIL_COUNT + 1`
+        		fi
+			Log "Fubared, FAIL_COUNT=$FAIL_COUNT"
+			echo "$FAIL_COUNT" > $DATA/RCONFailCount
+			if [ "$FAIL_COUNT" -gt "3" ]; then
+				rm -f $DATA/RCONFailCount
+				UpdateAndRestart
+				Log "Fubar Restart -  UPTIME: $UPTIME"
+			fi
+		elif [ -f $DATA/RCONFailCount ]; then
+			Log "Previous Fubar went away, removing fail count file."
+			rm -f $DATA/RCONFailCount
+		fi
+	fi
+	rm -f $DATA/lock
+fi
